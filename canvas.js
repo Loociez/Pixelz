@@ -373,7 +373,6 @@ importConfirmBtn.addEventListener("click", () => {
         updateProgressLabel();
       }
     }
-
   } catch {
     alert("Invalid JSON");
   }
