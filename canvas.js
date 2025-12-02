@@ -53,8 +53,8 @@ const progressSlider = document.getElementById("progress-slider");
 const progressLabel = document.getElementById("progress-label");
 
 const PIXEL_SIZE = 10;
-const GRID_WIDTH = 14;
-const GRID_HEIGHT = 14;
+const GRID_WIDTH = 140;
+const GRID_HEIGHT = 140;
 
 const CANVAS_WIDTH = PIXEL_SIZE * GRID_WIDTH;
 const CANVAS_HEIGHT = PIXEL_SIZE * GRID_HEIGHT;
