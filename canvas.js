@@ -8,7 +8,10 @@ const firebaseConfig = {
   measurementId: "G-MQJ2D3SPTS",
 };
 
-firebase.initializeApp(firebaseConfig);
+// Initialize Firebase only if not already initialized (safety check)
+if (!firebase.apps.length) {
+  firebase.initializeApp(firebaseConfig);
+}
 
 const auth = firebase.auth();
 const db = firebase.firestore();
@@ -109,6 +112,16 @@ let lastPlacedPixel = null; // track last placed pixel info for username display
 let sessionHistory = [];
 // Current position in sessionHistory, -1 means initial empty
 let currentHistoryIndex = -1;
+
+/**
+ * Update the progress label text under the slider.
+ * @param {number} [currentStep] - current history index (optional, defaults to currentHistoryIndex)
+ * @param {number} [totalSteps] - total history length (optional, defaults to sessionHistory.length - 1)
+ */
+function updateProgressLabel(currentStep = currentHistoryIndex, totalSteps = sessionHistory.length - 1) {
+  if (!progressLabel) return;
+  progressLabel.textContent = `History step: ${currentStep} / ${totalSteps}`;
+}
 
 // Initialize history by loading current pixel data snapshot from Firestore (called after auth and session creator known)
 async function initializeHistory() {
@@ -295,313 +308,289 @@ function applyBrush(x, y, brushSize, color, isErase) {
 
   return changes;
 }
-
-// Drawing handler - updates pixels + lastPlacedPixel in Firestore
-canvas.addEventListener("click", async (evt) => {
-  if (isReadOnly) return;
-  if (!currentUser) return;
-
-  const { x, y } = getMousePos(evt);
-  if (x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT) return;
-
-  const brushSize = Math.min(Math.max(parseInt(brushSizeInput.value, 10), 1), 10);
-  const changes = applyBrush(x, y, brushSize, colorPicker.value, isEraserActive);
-
-  if (changes.length > 0) {
-    userUndoStack.push(changes);
-    userRedoStack.length = 0;
-
-    try {
-      await pixelsDocRef.set(pixelData);
-
-      await sessionDocRef.update({
-        lastPlacedPixel: {
-          x,
-          y,
-          username: currentUsername,
-          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-        },
-      });
-
-      // If current user is session creator, update global session history
-      if (currentUser.uid === sessionCreatorUid) {
-        // Remove any redo history beyond currentHistoryIndex
-        if (currentHistoryIndex < sessionHistory.length - 1) {
-          sessionHistory = sessionHistory.slice(0, currentHistoryIndex + 1);
-        }
-        // Add new snapshot
-        sessionHistory.push({ pixelDataSnapshot: JSON.parse(JSON.stringify(pixelData)) });
-        currentHistoryIndex = sessionHistory.length - 1;
-
-        // Update slider max and value
-        if (progressSlider) {
-          progressSlider.max = sessionHistory.length - 1;
-          progressSlider.value = currentHistoryIndex;
-          updateProgressLabel();
-          document.getElementById("progress-container").style.display = "block";
-        }
-      }
-
-      drawGrid();
-    } catch (err) {
-      console.error("Error updating pixels and lastPlacedPixel:", err);
-      alert("Failed to place pixel. Try again.");
-    }
-  }
-});
-
-// Undo
+// Undo last user action
 function undo() {
-  if (isReadOnly) return;
-  if (!userUndoStack.length) return;
-  const changes = userUndoStack.pop();
+  if (userUndoStack.length === 0) return;
 
-  changes.forEach(({ pixelId, oldColor }) => {
+  const lastChanges = userUndoStack.pop();
+  const redoChanges = [];
+
+  lastChanges.forEach(({ pixelId, oldColor, newColor }) => {
     if (oldColor === null) {
       delete pixelData[pixelId];
     } else {
-      pixelData[pixelId] = { color: oldColor, owner: currentUser.uid };
+      pixelData[pixelId] = {
+        color: oldColor,
+        owner: currentUser.uid,
+        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+      };
     }
+    redoChanges.push({ pixelId, oldColor: newColor, newColor: oldColor });
   });
 
-  userRedoStack.push(changes);
-  pixelsDocRef.set(pixelData);
+  userRedoStack.push(redoChanges);
+
   drawGrid();
+  savePixelsToFirestore();
 }
 
-// Redo
+// Redo last undone action
 function redo() {
-  if (isReadOnly) return;
-  if (!userRedoStack.length) return;
-  const changes = userRedoStack.pop();
+  if (userRedoStack.length === 0) return;
 
-  changes.forEach(({ pixelId, newColor }) => {
+  const lastChanges = userRedoStack.pop();
+  const undoChanges = [];
+
+  lastChanges.forEach(({ pixelId, oldColor, newColor }) => {
     if (newColor === null) {
       delete pixelData[pixelId];
     } else {
-      pixelData[pixelId] = { color: newColor, owner: currentUser.uid };
+      pixelData[pixelId] = {
+        color: newColor,
+        owner: currentUser.uid,
+        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+      };
     }
+    undoChanges.push({ pixelId, oldColor: oldColor, newColor: newColor });
   });
 
-  userUndoStack.push(changes);
-  pixelsDocRef.set(pixelData);
+  userUndoStack.push(undoChanges);
+
+  drawGrid();
+  savePixelsToFirestore();
+}
+
+// Save pixelData to Firestore document
+async function savePixelsToFirestore() {
+  try {
+    await pixelsDocRef.set(pixelData);
+    // Also update session-wide history for creator only
+    if (currentUser && currentUser.uid === sessionCreatorUid) {
+      // Trim history if we're not at the latest
+      if (currentHistoryIndex < sessionHistory.length - 1) {
+        sessionHistory = sessionHistory.slice(0, currentHistoryIndex + 1);
+      }
+      // Save snapshot of pixelData
+      const snapshot = JSON.parse(JSON.stringify(pixelData));
+      sessionHistory.push({ pixelDataSnapshot: snapshot });
+      currentHistoryIndex++;
+
+      // Update slider
+      if (progressSlider) {
+        progressSlider.max = sessionHistory.length - 1;
+        progressSlider.value = currentHistoryIndex;
+        updateProgressLabel();
+      }
+    }
+  } catch (e) {
+    console.error("Failed to save pixels:", e);
+  }
+}
+
+// Load pixelData from Firestore document snapshot
+function loadPixelsFromSnapshot(snapshot) {
+  pixelData = snapshot ? JSON.parse(JSON.stringify(snapshot)) : {};
   drawGrid();
 }
 
-eraserBtn.addEventListener("click", () => {
-  if (isReadOnly) return;
-  isEraserActive = !isEraserActive;
-  eraserBtn.style.background = isEraserActive ? "#d32f2f" : "";
-});
+// Change session history step (called by slider)
+function changeHistoryStep(step) {
+  if (step < 0 || step >= sessionHistory.length) return;
 
-undoBtn.addEventListener("click", undo);
-redoBtn.addEventListener("click", redo);
+  currentHistoryIndex = step;
+  const snapshot = sessionHistory[step].pixelDataSnapshot;
+  loadPixelsFromSnapshot(snapshot);
 
-// Export
-exportBtn.addEventListener("click", () => {
-  if (isReadOnly) return;
-  const data = JSON.stringify(pixelData, null, 2);
-  const blob = new Blob([data], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `pixel-art-session-${sessionId}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-});
-
-// Import
-importBtn.addEventListener("click", () => {
-  if (isReadOnly) return;
-  importAreaContainer.style.display = "block";
-});
-
-importConfirmBtn.addEventListener("click", () => {
-  if (isReadOnly) return;
-  try {
-    pixelData = JSON.parse(importTextarea.value);
-    pixelsDocRef.set(pixelData);
-    importTextarea.value = "";
-    importAreaContainer.style.display = "none";
-
-    // Reset history after import (only for creator)
-    if (currentUser && currentUser.uid === sessionCreatorUid) {
-      sessionHistory = [{ pixelDataSnapshot: JSON.parse(JSON.stringify(pixelData)) }];
-      currentHistoryIndex = 0;
-      if (progressSlider) {
-        progressSlider.max = 0;
-        progressSlider.value = 0;
-        updateProgressLabel();
-        document.getElementById("progress-container").style.display = "block";
-      }
-    }
-  } catch {
-    alert("Invalid JSON");
+  // Update slider and label
+  if (progressSlider) {
+    progressSlider.value = step;
+    updateProgressLabel();
   }
-});
+}
 
-// Listen for slider changes (only for session creator)
+// Event: slider changed
 if (progressSlider) {
-  progressSlider.addEventListener("input", () => {
-    if (!currentUser || currentUser.uid !== sessionCreatorUid) return;
-    const index = parseInt(progressSlider.value, 10);
-    applyHistoryIndex(index);
+  progressSlider.addEventListener("input", (e) => {
+    const step = parseInt(e.target.value, 10);
+    changeHistoryStep(step);
   });
 }
 
-// Chat: Send message when Send button clicked or Enter pressed
-chatSendBtn.addEventListener("click", sendChatMessage);
-chatText.addEventListener("keydown", async (evt) => {
-  if (evt.key === "Enter" && !evt.shiftKey) {
-    evt.preventDefault();
-    await sendChatMessage();
+// Handle canvas mouse down event for painting
+canvas.addEventListener("mousedown", (evt) => {
+  if (isReadOnly || !currentUser) return;
+
+  const { x, y } = getMousePos(evt);
+  const brushSize = parseInt(brushSizeInput.value, 10) || 1;
+  const color = isEraserActive ? null : colorPicker.value;
+
+  const changes = applyBrush(x, y, brushSize, color, isEraserActive);
+
+  if (changes.length > 0) {
+    userUndoStack.push(changes);
+    userRedoStack = [];
+    lastPlacedPixel = {
+      x,
+      y,
+      username: currentUsername,
+      timestamp: firebase.firestore.Timestamp.now(),
+    };
+    drawGrid();
+    savePixelsToFirestore();
   }
 });
 
-async function sendChatMessage() {
-  const text = chatText.value.trim();
-  if (!text) return;
+// Toggle eraser button
+eraserBtn.addEventListener("click", () => {
+  isEraserActive = !isEraserActive;
+  eraserBtn.classList.toggle("active", isEraserActive);
+});
+
+// Undo button click
+undoBtn.addEventListener("click", undo);
+
+// Redo button click
+redoBtn.addEventListener("click", redo);
+
+// Export pixelData as JSON
+exportBtn.addEventListener("click", () => {
+  const exportData = JSON.stringify(pixelData, null, 2);
+  navigator.clipboard.writeText(exportData)
+    .then(() => alert("Pixel data copied to clipboard!"))
+    .catch(() => alert("Failed to copy pixel data."));
+});
+
+// Import pixelData from textarea
+importBtn.addEventListener("click", () => {
+  importAreaContainer.style.display = "block";
+  importTextarea.value = "";
+});
+
+importConfirmBtn.addEventListener("click", () => {
+  try {
+    const importedData = JSON.parse(importTextarea.value);
+    pixelData = importedData;
+    drawGrid();
+    savePixelsToFirestore();
+    importAreaContainer.style.display = "none";
+  } catch (e) {
+    alert("Invalid JSON data.");
+  }
+});
+
+// Logout button click
+logoutBtn.addEventListener("click", () => {
+  auth.signOut();
+});
+
+// Publish button click (for example, to finalize or send notifications)
+publishBtn.addEventListener("click", () => {
+  alert("Publish feature not implemented yet.");
+});
+
+// Back to lobby button click
+backLobbyBtn.addEventListener("click", () => {
+  window.location.href = "lobby.html";
+});
+
+// Chat send button
+chatSendBtn.addEventListener("click", async () => {
+  const message = chatText.value.trim();
+  if (!message || !currentUser) return;
 
   try {
     await chatCollectionRef.add({
       uid: currentUser.uid,
       username: currentUsername,
-      text,
+      message,
       timestamp: firebase.firestore.FieldValue.serverTimestamp(),
     });
     chatText.value = "";
-  } catch (err) {
-    console.error("Failed to send chat message:", err);
-    alert("Failed to send message.");
+  } catch (e) {
+    console.error("Failed to send chat message:", e);
   }
-}
-
-// Publish
-publishBtn.addEventListener("click", async () => {
-  if (isReadOnly) return;
-  if (currentUser.uid !== sessionCreatorUid) {
-    alert("Only the creator can publish.");
-    return;
-  }
-
-  await sessionDocRef.update({
-    published: pixelData,
-    publishedAt: firebase.firestore.FieldValue.serverTimestamp(),
-    publishedBy: currentUsername,
-  });
-
-  alert("Published!");
 });
 
-// Zoom
+// Listen for chat messages realtime update
+chatCollectionRef
+  .orderBy("timestamp", "asc")
+  .onSnapshot((snapshot) => {
+    chatMessages.innerHTML = "";
+    snapshot.forEach((doc) => {
+      const { username, message, timestamp } = doc.data();
+      const timeStr = timestamp ? new Date(timestamp.toMillis()).toLocaleTimeString() : "";
+      const li = document.createElement("li");
+      li.textContent = `(${timeStr}) ${username}: ${message}`;
+      chatMessages.appendChild(li);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    });
+  });
+// Firebase auth state change listener
+auth.onAuthStateChanged(async (user) => {
+  if (user) {
+    currentUser = user;
+    currentUsername = user.displayName || user.email || "User";
+
+    // Check if current user is session creator
+    try {
+      const sessionDoc = await sessionDocRef.get();
+      if (sessionDoc.exists) {
+        const sessionData = sessionDoc.data();
+        sessionCreatorUid = sessionData.creatorUid || null;
+
+        // Show slider only for creator
+        if (currentUser.uid === sessionCreatorUid && progressSlider) {
+          progressSlider.style.display = "inline-block";
+          document.getElementById("progress-container").style.display = "block";
+        } else {
+          if (progressSlider) progressSlider.style.display = "none";
+          document.getElementById("progress-container").style.display = "none";
+        }
+      }
+    } catch (e) {
+      console.error("Failed to fetch session info:", e);
+    }
+
+    // Initialize pixel data and history after auth and session creator known
+    await initializeHistory();
+
+    // Load current pixels from Firestore realtime
+    pixelsDocRef.onSnapshot((doc) => {
+      if (doc.exists && currentHistoryIndex === sessionHistory.length - 1) {
+        const data = doc.data() || {};
+        pixelData = data;
+        drawGrid();
+      }
+    });
+
+  } else {
+    currentUser = null;
+    currentUsername = "Guest";
+    window.location.href = "login.html";
+  }
+});
+
+// Zoom controls (optional)
 document.getElementById("zoom-in-btn").addEventListener("click", () => {
-  zoomLevel = Math.min(zoomLevel + 0.25, 4);
+  zoomLevel = Math.min(4, zoomLevel + 0.25);
   drawGrid();
 });
 document.getElementById("zoom-out-btn").addEventListener("click", () => {
-  zoomLevel = Math.max(zoomLevel - 0.25, 0.25);
-  drawGrid();
-});
-document.getElementById("reset-zoom-btn").addEventListener("click", () => {
-  zoomLevel = 1;
+  zoomLevel = Math.max(0.25, zoomLevel - 0.25);
   drawGrid();
 });
 
-// Live pixel updates + also listen for lastPlacedPixel field
-function listenCanvasUpdates() {
-  pixelsDocRef.onSnapshot(async (snap) => {
-    if (snap.exists) {
-      pixelData = snap.data();
-      drawGrid();
-    }
-  });
-
-  sessionDocRef.onSnapshot((snap) => {
-    if (snap.exists) {
-      const data = snap.data();
-      if (data.lastPlacedPixel) {
-        lastPlacedPixel = data.lastPlacedPixel;
-        drawGrid();
-      }
-    }
-  });
+// Prevent actions if read-only mode
+if (isReadOnly) {
+  colorPicker.disabled = true;
+  brushSizeInput.disabled = true;
+  eraserBtn.disabled = true;
+  undoBtn.disabled = true;
+  redoBtn.disabled = true;
+  exportBtn.disabled = true;
+  importBtn.disabled = true;
+  publishBtn.disabled = true;
+  chatText.disabled = true;
+  chatSendBtn.disabled = true;
+  alert("You are in read-only mode. Editing is disabled.");
 }
-
-// Live chat updates
-function listenChat() {
-  chatCollectionRef.orderBy("timestamp").onSnapshot((snap) => {
-    chatMessages.innerHTML = "";
-    snap.forEach((doc) => {
-      const { username, text, timestamp } = doc.data();
-      const div = document.createElement("div");
-      const time = timestamp ? new Date(timestamp.toDate()).toLocaleTimeString() : "";
-      div.textContent = `[${time}] ${username}: ${text}`;
-      chatMessages.appendChild(div);
-    });
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-  });
-}
-
-// LOGOUT
-logoutBtn.addEventListener("click", () => {
-  auth.signOut().then(() => {
-    window.location.href = "index.html";
-  });
-});
-
-backLobbyBtn.addEventListener("click", () => {
-  window.location.href = "lobby.html";
-});
-
-// Auth
-auth.onAuthStateChanged(async (user) => {
-  if (!user) {
-    window.location.href = "index.html";
-    return;
-  }
-
-  await user.reload();
-  currentUser = auth.currentUser;
-  currentUsername = currentUser.displayName || currentUser.email || "Guest";
-
-  const sessionDoc = await sessionDocRef.get();
-  if (sessionDoc.exists) {
-    sessionCreatorUid = sessionDoc.data().creatorUid;
-
-    if (currentUser.uid === sessionCreatorUid && !isReadOnly) {
-      publishBtn.style.display = "inline-block";
-
-      // Show slider UI for creator
-      if (progressSlider) {
-        progressSlider.style.display = "inline-block";
-        progressSlider.max = sessionHistory.length - 1 >= 0 ? sessionHistory.length - 1 : 0;
-        progressSlider.value = currentHistoryIndex >= 0 ? currentHistoryIndex : 0;
-        updateProgressLabel();
-      }
-    } else {
-      if (progressSlider) {
-        progressSlider.style.display = "none";
-      }
-    }
-  }
-
-  if (isReadOnly) {
-    colorPicker.style.display = "none";
-    brushSizeInput.style.display = "none";
-    eraserBtn.style.display = "none";
-    undoBtn.style.display = "none";
-    redoBtn.style.display = "none";
-    exportBtn.style.display = "none";
-    importBtn.style.display = "none";
-    publishBtn.style.display = "none";
-    importAreaContainer.style.display = "none";
-    if (progressSlider) progressSlider.style.display = "none";
-  }
-
-  listenCanvasUpdates();
-  listenChat();
-});
-
-// Initial render
-drawGrid();
