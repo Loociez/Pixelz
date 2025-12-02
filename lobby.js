@@ -15,6 +15,7 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
+// DOM elements
 const createSessionBtn = document.getElementById("create-session-btn");
 const usernameInput = document.getElementById("username-input");
 const saveUsernameBtn = document.getElementById("username-save-btn");
@@ -25,11 +26,12 @@ const galleryList = document.getElementById("gallery-list");
 let currentUser = null;
 let currentUsername = "Guest";
 
+// Guest name generator
 function generateGuestName() {
   return "Guest" + Math.floor(1000 + Math.random() * 9000);
 }
 
-// Save username locally and in user profile
+// Save username in Firebase user profile + localStorage
 async function saveUsername(username) {
   if (!currentUser) return;
   try {
@@ -43,9 +45,10 @@ async function saveUsername(username) {
   }
 }
 
-// Load username from local storage or use guest/default
+// Load username on login
 function loadUsername() {
   const saved = localStorage.getItem("username");
+
   if (saved) {
     currentUsername = saved;
   } else if (currentUser?.displayName) {
@@ -53,31 +56,41 @@ function loadUsername() {
   } else {
     currentUsername = generateGuestName();
   }
+
   usernameInput.value = currentUsername;
 }
 
+// Create persistent session (stays open even if creator offline)
 createSessionBtn.addEventListener("click", async () => {
   if (!currentUser) return alert("Please log in.");
 
   const newSessionRef = db.collection("sessions").doc();
+
   await newSessionRef.set({
     creatorUid: currentUser.uid,
     creatorUsername: currentUsername,
     createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-    pixels: {}, // initial empty pixels
+
+    // These allow others to join long after the creator leaves
+    pixels: {},
+    lastUpdated: firebase.firestore.FieldValue.serverTimestamp(),
+
+    // Publishing data
     published: null,
+    publishedAt: null,
   });
 
   window.location.href = `canvas.html?session=${newSessionRef.id}`;
 });
 
+// Username button
 saveUsernameBtn.addEventListener("click", () => {
   const username = usernameInput.value.trim();
   if (!username) return alert("Username cannot be empty.");
   saveUsername(username);
 });
 
-// Logout button listener
+// Logout
 logoutBtn.addEventListener("click", async () => {
   try {
     await auth.signOut();
@@ -88,29 +101,35 @@ logoutBtn.addEventListener("click", async () => {
   }
 });
 
-// Load published gallery
+// --------------------------
+// Load PUBLISHED gallery
+// --------------------------
+
 async function loadPublishedGallery() {
   if (!galleryList) return;
   galleryList.innerHTML = "Loading gallery...";
 
   try {
-    // We'll just order by publishedAt descending and filter in code.
+    // Only fetch sessions that HAVE a published object
     const snapshot = await db.collection("sessions")
+      .where("published", "!=", null)
+      .orderBy("published")
       .orderBy("publishedAt", "desc")
       .limit(20)
       .get();
 
     galleryList.innerHTML = "";
 
-    let foundPublished = false;
+    if (snapshot.empty) {
+      galleryList.textContent = "No published artworks yet.";
+      return;
+    }
 
     snapshot.forEach((doc) => {
       const data = doc.data();
       const published = data.published;
 
-      if (!published) return; // Skip if not published
-
-      foundPublished = true;
+      if (!published) return;
 
       const item = document.createElement("div");
       item.className = "gallery-item";
@@ -121,14 +140,15 @@ async function loadPublishedGallery() {
       item.appendChild(title);
 
       const previewCanvas = document.createElement("canvas");
-      previewCanvas.width = 64 * 10; // 64 pixels wide * pixel size (10)
-      previewCanvas.height = 64 * 10; // 64 pixels tall * pixel size (10)
+      previewCanvas.width = 64 * 10;
+      previewCanvas.height = 64 * 10;
       previewCanvas.className = "gallery-canvas";
       item.appendChild(previewCanvas);
 
-      // Draw preview of published art on canvas
+      // Draw preview
       const ctx = previewCanvas.getContext("2d");
       ctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+
       const PIXEL_SIZE = 10;
 
       for (const key in published) {
@@ -139,6 +159,7 @@ async function loadPublishedGallery() {
         ctx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
       }
 
+      // Open canvas in read-only mode
       item.addEventListener("click", () => {
         window.location.href = `canvas.html?session=${doc.id}&readonly=true`;
       });
@@ -146,20 +167,19 @@ async function loadPublishedGallery() {
       galleryList.appendChild(item);
     });
 
-    if (!foundPublished) {
-      galleryList.textContent = "No published artworks yet.";
-    }
   } catch (err) {
     console.error("Error loading published gallery:", err);
     galleryList.textContent = "Failed to load published artworks.";
   }
 }
 
+// Auth state
 auth.onAuthStateChanged(async (user) => {
   if (!user) {
     window.location.href = "index.html";
     return;
   }
+
   currentUser = user;
   loadUsername();
   await loadPublishedGallery();

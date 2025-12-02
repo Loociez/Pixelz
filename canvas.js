@@ -48,8 +48,9 @@ const importTextarea = document.getElementById("import-textarea");
 const importConfirmBtn = document.getElementById("import-confirm-btn");
 
 const PIXEL_SIZE = 10;
-const GRID_WIDTH = 192;  // 3x wider (64 * 3)
-const GRID_HEIGHT = 128; // 2x taller (64 * 2)
+const GRID_WIDTH = 192;
+const GRID_HEIGHT = 128;
+
 const CANVAS_WIDTH = PIXEL_SIZE * GRID_WIDTH;
 const CANVAS_HEIGHT = PIXEL_SIZE * GRID_HEIGHT;
 
@@ -71,29 +72,27 @@ let userRedoStack = [];
 
 let sessionCreatorUid = null;
 
-// Draw the grid and pixels on canvas
+// Draw grid + pixels
 function drawGrid() {
   ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-
   ctx.save();
   ctx.scale(zoomLevel, zoomLevel);
 
   for (const key in pixelData) {
     const { color, owner } = pixelData[key];
     const [x, y] = key.split("_").map(Number);
-    ctx.fillStyle = color || "#000000";
+    ctx.fillStyle = color || "#000";
     ctx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
 
-    // Mark pixels not drawn by current user with a small indicator
     if (owner && currentUser && owner !== currentUser.uid) {
       ctx.fillStyle = "rgba(255,255,255,0.3)";
       ctx.fillRect(x * PIXEL_SIZE + PIXEL_SIZE - 3, y * PIXEL_SIZE, 3, 3);
     }
   }
 
-  // Draw grid lines
   ctx.strokeStyle = "#444";
   ctx.lineWidth = 0.5;
+
   for (let i = 0; i <= GRID_WIDTH; i++) {
     ctx.beginPath();
     ctx.moveTo(i * PIXEL_SIZE, 0);
@@ -110,6 +109,7 @@ function drawGrid() {
   ctx.restore();
 }
 
+// Get mouse pixel pos
 function getMousePos(evt) {
   const rect = canvas.getBoundingClientRect();
   const x = Math.floor((evt.clientX - rect.left) / (PIXEL_SIZE * zoomLevel));
@@ -117,8 +117,9 @@ function getMousePos(evt) {
   return { x, y };
 }
 
+// Drawing
 canvas.addEventListener("click", (evt) => {
-  if (isReadOnly) return; // DISABLE DRAWING IN READ-ONLY
+  if (isReadOnly) return;
   if (!currentUser) return;
 
   const { x, y } = getMousePos(evt);
@@ -137,16 +138,10 @@ canvas.addEventListener("click", (evt) => {
       const pixelId = `${px}_${py}`;
       const oldPixel = pixelData[pixelId] || { color: null, owner: null };
       const oldColor = oldPixel.color;
-
       const newColor = isEraserActive ? null : colorPicker.value;
 
       if (oldColor !== newColor) {
-        changes.push({
-          pixelId,
-          oldColor,
-          newColor,
-        });
-
+        changes.push({ pixelId, oldColor, newColor });
         pixelData[pixelId] = {
           color: newColor,
           owner: currentUser.uid,
@@ -164,27 +159,17 @@ canvas.addEventListener("click", (evt) => {
   }
 });
 
+// Undo
 function undo() {
-  if (isReadOnly) return; // DISABLE UNDO IN READ-ONLY
-  if (userUndoStack.length === 0) return;
+  if (isReadOnly) return;
+  if (!userUndoStack.length) return;
   const changes = userUndoStack.pop();
-  if (!changes) return;
 
   changes.forEach(({ pixelId, oldColor }) => {
-    if (pixelData[pixelId]?.owner !== currentUser.uid) {
-      // skip pixels not owned by current user
-      return;
-    }
-
     if (oldColor === null) {
       delete pixelData[pixelId];
     } else {
-      pixelData[pixelId].color = oldColor;
-      if (oldColor === null) {
-        delete pixelData[pixelId].owner;
-      } else {
-        pixelData[pixelId].owner = currentUser.uid;
-      }
+      pixelData[pixelId] = { color: oldColor, owner: currentUser.uid };
     }
   });
 
@@ -193,26 +178,17 @@ function undo() {
   drawGrid();
 }
 
+// Redo
 function redo() {
-  if (isReadOnly) return; // DISABLE REDO IN READ-ONLY
-  if (userRedoStack.length === 0) return;
+  if (isReadOnly) return;
+  if (!userRedoStack.length) return;
   const changes = userRedoStack.pop();
-  if (!changes) return;
 
   changes.forEach(({ pixelId, newColor }) => {
-    if (pixelData[pixelId]?.owner !== currentUser.uid && newColor !== null) {
-      // Only redo pixels owned by current user
-      return;
-    }
-
     if (newColor === null) {
       delete pixelData[pixelId];
     } else {
-      pixelData[pixelId] = {
-        color: newColor,
-        owner: currentUser.uid,
-        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-      };
+      pixelData[pixelId] = { color: newColor, owner: currentUser.uid };
     }
   });
 
@@ -222,7 +198,7 @@ function redo() {
 }
 
 eraserBtn.addEventListener("click", () => {
-  if (isReadOnly) return; // DISABLE ERASER IN READ-ONLY
+  if (isReadOnly) return;
   isEraserActive = !isEraserActive;
   eraserBtn.style.background = isEraserActive ? "#d32f2f" : "";
 });
@@ -230,47 +206,46 @@ eraserBtn.addEventListener("click", () => {
 undoBtn.addEventListener("click", undo);
 redoBtn.addEventListener("click", redo);
 
+// Export
 exportBtn.addEventListener("click", () => {
-  if (isReadOnly) return; // DISABLE EXPORT IN READ-ONLY
-  const exportData = JSON.stringify(pixelData, null, 2);
-  const blob = new Blob([exportData], { type: "application/json" });
+  if (isReadOnly) return;
+  const data = JSON.stringify(pixelData, null, 2);
+  const blob = new Blob([data], { type: "application/json" });
   const url = URL.createObjectURL(blob);
 
   const a = document.createElement("a");
   a.href = url;
   a.download = `pixel-art-session-${sessionId}.json`;
   a.click();
-
   URL.revokeObjectURL(url);
 });
 
+// Import
 importBtn.addEventListener("click", () => {
-  if (isReadOnly) return; // DISABLE IMPORT IN READ-ONLY
+  if (isReadOnly) return;
   importAreaContainer.style.display = "block";
 });
 
 importConfirmBtn.addEventListener("click", () => {
-  if (isReadOnly) return; // DISABLE IMPORT IN READ-ONLY
+  if (isReadOnly) return;
   try {
-    const importedData = JSON.parse(importTextarea.value);
-    pixelData = importedData;
+    pixelData = JSON.parse(importTextarea.value);
     pixelsDocRef.set(pixelData);
-    importAreaContainer.style.display = "none";
     importTextarea.value = "";
-    userUndoStack = [];
-    userRedoStack = [];
-  } catch (err) {
+    importAreaContainer.style.display = "none";
+  } catch {
     alert("Invalid JSON");
   }
 });
 
+// Chat
 chatSendBtn.addEventListener("click", async () => {
   const text = chatText.value.trim();
   if (!text) return;
 
   await chatCollectionRef.add({
     uid: currentUser.uid,
-    username: currentUsername || "Guest",
+    username: currentUsername,
     text,
     timestamp: firebase.firestore.FieldValue.serverTimestamp(),
   });
@@ -278,115 +253,109 @@ chatSendBtn.addEventListener("click", async () => {
   chatText.value = "";
 });
 
+// Publish
 publishBtn.addEventListener("click", async () => {
-  if (isReadOnly) return; // DISABLE PUBLISH IN READ-ONLY
+  if (isReadOnly) return;
   if (currentUser.uid !== sessionCreatorUid) {
-    alert("Only the creator can publish this artwork.");
+    alert("Only the creator can publish.");
     return;
   }
-  try {
-    await sessionDocRef.update({
-      published: pixelData,
-      publishedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      publishedBy: currentUsername || currentUser.email || "Guest",
-    });
-    alert("Pixel art published!");
-  } catch (err) {
-    console.error("Publish failed:", err);
-    alert("Failed to publish pixel art.");
-  }
+
+  await sessionDocRef.update({
+    published: pixelData,
+    publishedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    publishedBy: currentUsername,
+  });
+
+  alert("Published!");
 });
 
-// Zoom controls - always enabled (reading only changes canvas scale, no edits)
-const zoomInBtn = document.getElementById("zoom-in-btn");
-const zoomOutBtn = document.getElementById("zoom-out-btn");
-const resetZoomBtn = document.getElementById("reset-zoom-btn");
-
-zoomInBtn.addEventListener("click", () => {
+// Zoom
+document.getElementById("zoom-in-btn").addEventListener("click", () => {
   zoomLevel = Math.min(zoomLevel + 0.25, 4);
   drawGrid();
 });
-zoomOutBtn.addEventListener("click", () => {
+document.getElementById("zoom-out-btn").addEventListener("click", () => {
   zoomLevel = Math.max(zoomLevel - 0.25, 0.25);
   drawGrid();
 });
-resetZoomBtn.addEventListener("click", () => {
+document.getElementById("reset-zoom-btn").addEventListener("click", () => {
   zoomLevel = 1;
   drawGrid();
 });
 
+// Live pixel updates
 function listenCanvasUpdates() {
-  pixelsDocRef.onSnapshot((docSnap) => {
-    if (docSnap.exists) {
-      pixelData = docSnap.data();
+  pixelsDocRef.onSnapshot((snap) => {
+    if (snap.exists) {
+      pixelData = snap.data();
       drawGrid();
     }
   });
 }
 
+// Live chat updates
 function listenChat() {
-  chatCollectionRef.orderBy("timestamp", "asc").onSnapshot((snapshot) => {
+  chatCollectionRef.orderBy("timestamp").onSnapshot((snap) => {
     chatMessages.innerHTML = "";
-    snapshot.forEach((doc) => {
-      const msg = doc.data();
+    snap.forEach((doc) => {
+      const { username, text, timestamp } = doc.data();
       const div = document.createElement("div");
-      const timeStr = msg.timestamp
-        ? new Date(msg.timestamp.toDate()).toLocaleTimeString()
-        : "";
-
-      div.textContent = `[${timeStr}] ${msg.username || "Guest"}: ${msg.text}`;
+      const time = timestamp ? new Date(timestamp.toDate()).toLocaleTimeString() : "";
+      div.textContent = `[${time}] ${username}: ${text}`;
       chatMessages.appendChild(div);
     });
     chatMessages.scrollTop = chatMessages.scrollHeight;
   });
 }
 
+// LOGOUT — UPDATED ✔
+// ❗ No deleting the session. Only sign out.
 logoutBtn.addEventListener("click", () => {
-  auth.signOut();
+  auth.signOut().then(() => {
+    window.location.href = "index.html";
+  });
 });
 
 backLobbyBtn.addEventListener("click", () => {
   window.location.href = "lobby.html";
 });
 
+// Auth
 auth.onAuthStateChanged(async (user) => {
   if (!user) {
-    alert("Not logged in");
     window.location.href = "index.html";
-  } else {
-    // Force reload to get updated displayName
-    await user.reload();
-    currentUser = auth.currentUser;
-    currentUsername = currentUser.displayName || currentUser.email || "Guest";
-
-    // Get session creator UID to enable publish button
-    const sessionDoc = await sessionDocRef.get();
-    if (sessionDoc.exists) {
-      sessionCreatorUid = sessionDoc.data().creatorUid;
-      if (currentUser.uid === sessionCreatorUid && !isReadOnly) {
-        publishBtn.style.display = "inline-block";
-      } else {
-        publishBtn.style.display = "none";
-      }
-    }
-
-    // Hide editing UI if readonly
-    if (isReadOnly) {
-      colorPicker.style.display = "none";
-      brushSizeInput.style.display = "none";
-      eraserBtn.style.display = "none";
-      undoBtn.style.display = "none";
-      redoBtn.style.display = "none";
-      exportBtn.style.display = "none";
-      importBtn.style.display = "none";
-      importAreaContainer.style.display = "none";
-      publishBtn.style.display = "none";
-    }
-
-    listenCanvasUpdates();
-    listenChat();
+    return;
   }
+
+  await user.reload();
+  currentUser = auth.currentUser;
+  currentUsername = currentUser.displayName || currentUser.email || "Guest";
+
+  const sessionDoc = await sessionDocRef.get();
+  if (sessionDoc.exists) {
+    sessionCreatorUid = sessionDoc.data().creatorUid;
+
+    if (currentUser.uid === sessionCreatorUid && !isReadOnly) {
+      publishBtn.style.display = "inline-block";
+    }
+  }
+
+  if (isReadOnly) {
+    colorPicker.style.display = "none";
+    brushSizeInput.style.display = "none";
+    eraserBtn.style.display = "none";
+    undoBtn.style.display = "none";
+    redoBtn.style.display = "none";
+    exportBtn.style.display = "none";
+    importBtn.style.display = "none";
+    publishBtn.style.display = "none";
+    importAreaContainer.style.display = "none";
+  }
+
+  listenCanvasUpdates();
+  listenChat();
 });
 
-// Initial draw
+// Initial render
 drawGrid();
