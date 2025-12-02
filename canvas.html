@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pixel Art Collab - Canvas</title>
+<style>
+  body {
+    margin: 0;
+    background: #111;
+    color: #eee;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  body[data-readonly="true"] #pixelCanvas {
+    cursor: default !important;
+  }
+  body[data-readonly="true"] #color-picker,
+  body[data-readonly="true"] #brush-size,
+  body[data-readonly="true"] #eraser-btn,
+  body[data-readonly="true"] #undo-btn,
+  body[data-readonly="true"] #redo-btn,
+  body[data-readonly="true"] #publish-btn,
+  body[data-readonly="true"] #export-btn,
+  body[data-readonly="true"] #import-btn,
+  body[data-readonly="true"] #import-confirm-btn,
+  body[data-readonly="true"] #import-textarea,
+  body[data-readonly="true"] #export-import {
+    display: none !important;
+  }
+  #header {
+    background: #222;
+    padding: 0.5rem 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  #header h2 {
+    margin: 0;
+  }
+  button {
+    background: #f44336;
+    border: none;
+    color: white;
+    padding: 0.4rem 0.8rem;
+    font-weight: bold;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  button:hover {
+    background: #d32f2f;
+  }
+  #main-content {
+    display: flex;
+    flex-grow: 1;
+    overflow: hidden;
+  }
+  #left-panel {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0.5rem;
+    overflow: hidden;
+  }
+  #canvas-wrapper {
+    border: 2px solid #555;
+    background: #222;
+    cursor: crosshair;
+    overflow: auto;
+    flex-grow: 1;
+    width: 100%;
+    max-width: 100%;
+  }
+  #pixelCanvas {
+    image-rendering: pixelated;
+    display: block;
+    user-select: none;
+  }
+  #tools {
+    margin-top: 0.5rem;
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  #tools > * {
+    cursor: pointer;
+  }
+  #color-picker {
+    height: 30px;
+    width: 30px;
+    border-radius: 4px;
+    border: 1px solid #888;
+  }
+  #brush-size {
+    width: 50px;
+  }
+  #info {
+    text-align: center;
+    margin-top: 0.5rem;
+  }
+  #right-panel {
+    width: 300px;
+    background: #222;
+    border-left: 2px solid #555;
+    display: flex;
+    flex-direction: column;
+  }
+  #chat {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+  }
+  #chat-messages {
+    flex-grow: 1;
+    padding: 0.5rem;
+    overflow-y: auto;
+    border-bottom: 1px solid #555;
+    font-size: 0.9rem;
+  }
+  #chat-input {
+    display: flex;
+    padding: 0.5rem;
+  }
+  #chat-input input {
+    flex-grow: 1;
+    padding: 0.4rem;
+    border-radius: 4px;
+    border: none;
+    font-size: 1rem;
+  }
+  #chat-input button {
+    margin-left: 0.5rem;
+    background: #4caf50;
+  }
+  #export-import {
+    padding: 0.5rem;
+    border-top: 1px solid #555;
+  }
+  textarea {
+    width: 100%;
+    height: 100px;
+    background: #333;
+    border: none;
+    color: #eee;
+    resize: none;
+    font-family: monospace;
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+    border-radius: 4px;
+  }
+  #zoom-controls {
+    margin-left: 1rem;
+  }
+  #zoom-controls button {
+    background: #4caf50;
+  }
+</style>
+
+<!-- Firebase SDKs -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+<script>
+  // Detect readonly from URL param and set on body attribute early
+  function getQueryParam(param) {
+    const params = new URLSearchParams(window.location.search);
+    return params.get(param);
+  }
+  window.addEventListener('DOMContentLoaded', () => {
+    const readonly = getQueryParam('readonly');
+    if (readonly === 'true') {
+      document.body.dataset.readonly = 'true';
+    } else {
+      document.body.dataset.readonly = 'false';
+    }
+  });
+</script>
+
+</head>
+<body>
+  <div id="header">
+    <h2>Collaborative Pixel Art</h2>
+    <div>
+      <button id="back-lobby-btn" title="Back to Lobby">Back to Lobby</button>
+      <button id="publish-btn" title="Publish current art" style="display:none;">Publish</button>
+      <button id="export-btn" title="Export canvas JSON">Export</button>
+      <button id="import-btn" title="Import canvas JSON">Import</button>
+      <button id="logout-btn">Logout</button>
+    </div>
+  </div>
+
+  <div id="main-content">
+    <div id="left-panel">
+      <div id="canvas-wrapper">
+        <canvas id="pixelCanvas" tabindex="0"></canvas>
+      </div>
+      <div id="tools">
+        <input type="color" id="color-picker" value="#ff0000" title="Pick a color" />
+        <label for="brush-size" style="color:#eee;">Brush Size:</label>
+        <input type="number" id="brush-size" value="1" min="1" max="10" />
+        <button id="eraser-btn" title="Eraser tool">Eraser</button>
+        <button id="undo-btn" title="Undo last change">Undo</button>
+        <button id="redo-btn" title="Redo undone change">Redo</button>
+        <div id="zoom-controls">
+          <button id="zoom-in-btn" title="Zoom In">+</button>
+          <button id="zoom-out-btn" title="Zoom Out">-</button>
+          <button id="reset-zoom-btn" title="Reset Zoom">Reset</button>
+        </div>
+      </div>
+      <div id="info">Click pixels to draw. Use brush size & eraser tools.</div>
+    </div>
+
+    <div id="right-panel">
+      <div id="chat">
+        <div id="chat-messages"></div>
+        <div id="chat-input">
+          <input type="text" id="chat-text" placeholder="Type a message..." />
+          <button id="chat-send-btn">Send</button>
+        </div>
+      </div>
+      <div id="export-import" style="display:none;">
+        <textarea id="import-textarea" placeholder="Paste JSON here to import"></textarea>
+        <button id="import-confirm-btn">Import Canvas</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="canvas.js"></script>
+</body>
+</html>
