@@ -72,7 +72,7 @@ let userRedoStack = [];
 
 let sessionCreatorUid = null;
 
-let lastPlacedPixel = null; // New: track last placed pixel info for username display
+let lastPlacedPixel = null; // track last placed pixel info for username display
 
 // Draw grid + pixels + last placed pixel username label
 function drawGrid() {
@@ -113,8 +113,12 @@ function drawGrid() {
   if (lastPlacedPixel) {
     const { x, y, username, timestamp } = lastPlacedPixel;
 
-    // Only show label if placed less than 10 seconds ago
-    if (Date.now() - timestamp.toMillis() < 10000) {
+    // Only show label if timestamp exists and placed less than 10 seconds ago
+    if (
+      timestamp &&
+      typeof timestamp.toMillis === "function" &&
+      Date.now() - timestamp.toMillis() < 10000
+    ) {
       const px = x * PIXEL_SIZE;
       const py = y * PIXEL_SIZE;
 
@@ -179,17 +183,9 @@ canvas.addEventListener("click", async (evt) => {
     userUndoStack.push(changes);
     userRedoStack.length = 0;
 
-    // Prepare update object for Firestore: pixels + lastPlacedPixel
-    const updateData = { ...pixelData };
-
-    // Firestore doesn't allow top-level field with dots, so update pixel fields as object
-    // We'll update the whole pixel data doc instead, as before
-
     try {
-      // Update pixel data doc
       await pixelsDocRef.set(pixelData);
 
-      // Update lastPlacedPixel on session doc
       await sessionDocRef.update({
         lastPlacedPixel: {
           x,
@@ -367,8 +363,7 @@ function listenChat() {
   });
 }
 
-// LOGOUT — UPDATED ✔
-// ❗ No deleting the session. Only sign out.
+// LOGOUT
 logoutBtn.addEventListener("click", () => {
   auth.signOut().then(() => {
     window.location.href = "index.html";
