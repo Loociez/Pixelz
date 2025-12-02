@@ -72,12 +72,15 @@ let userRedoStack = [];
 
 let sessionCreatorUid = null;
 
-// Draw grid + pixels
+let lastPlacedPixel = null; // New: track last placed pixel info for username display
+
+// Draw grid + pixels + last placed pixel username label
 function drawGrid() {
   ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
   ctx.save();
   ctx.scale(zoomLevel, zoomLevel);
 
+  // Draw pixels
   for (const key in pixelData) {
     const { color, owner } = pixelData[key];
     const [x, y] = key.split("_").map(Number);
@@ -90,9 +93,9 @@ function drawGrid() {
     }
   }
 
+  // Draw grid lines
   ctx.strokeStyle = "#444";
   ctx.lineWidth = 0.5;
-
   for (let i = 0; i <= GRID_WIDTH; i++) {
     ctx.beginPath();
     ctx.moveTo(i * PIXEL_SIZE, 0);
@@ -106,6 +109,26 @@ function drawGrid() {
     ctx.stroke();
   }
 
+  // Draw username label on last placed pixel
+  if (lastPlacedPixel) {
+    const { x, y, username, timestamp } = lastPlacedPixel;
+
+    // Only show label if placed less than 10 seconds ago
+    if (Date.now() - timestamp.toMillis() < 10000) {
+      const px = x * PIXEL_SIZE;
+      const py = y * PIXEL_SIZE;
+
+      ctx.font = "14px Arial";
+      ctx.textBaseline = "bottom";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
+      ctx.lineWidth = 4;
+
+      ctx.strokeText(username, px, py - 4);
+      ctx.fillText(username, px, py - 4);
+    }
+  }
+
   ctx.restore();
 }
 
@@ -117,8 +140,8 @@ function getMousePos(evt) {
   return { x, y };
 }
 
-// Drawing
-canvas.addEventListener("click", (evt) => {
+// Drawing handler - updates pixels + lastPlacedPixel in Firestore
+canvas.addEventListener("click", async (evt) => {
   if (isReadOnly) return;
   if (!currentUser) return;
 
@@ -129,6 +152,7 @@ canvas.addEventListener("click", (evt) => {
 
   let changes = [];
 
+  // Build updates for brush area
   for (let dx = 0; dx < brushSize; dx++) {
     for (let dy = 0; dy < brushSize; dy++) {
       const px = x + dx;
@@ -154,8 +178,32 @@ canvas.addEventListener("click", (evt) => {
   if (changes.length > 0) {
     userUndoStack.push(changes);
     userRedoStack.length = 0;
-    pixelsDocRef.set(pixelData);
-    drawGrid();
+
+    // Prepare update object for Firestore: pixels + lastPlacedPixel
+    const updateData = { ...pixelData };
+
+    // Firestore doesn't allow top-level field with dots, so update pixel fields as object
+    // We'll update the whole pixel data doc instead, as before
+
+    try {
+      // Update pixel data doc
+      await pixelsDocRef.set(pixelData);
+
+      // Update lastPlacedPixel on session doc
+      await sessionDocRef.update({
+        lastPlacedPixel: {
+          x,
+          y,
+          username: currentUsername,
+          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+        },
+      });
+
+      drawGrid();
+    } catch (err) {
+      console.error("Error updating pixels and lastPlacedPixel:", err);
+      alert("Failed to place pixel. Try again.");
+    }
   }
 });
 
@@ -284,12 +332,22 @@ document.getElementById("reset-zoom-btn").addEventListener("click", () => {
   drawGrid();
 });
 
-// Live pixel updates
+// Live pixel updates + also listen for lastPlacedPixel field
 function listenCanvasUpdates() {
-  pixelsDocRef.onSnapshot((snap) => {
+  pixelsDocRef.onSnapshot(async (snap) => {
     if (snap.exists) {
       pixelData = snap.data();
       drawGrid();
+    }
+  });
+
+  sessionDocRef.onSnapshot((snap) => {
+    if (snap.exists) {
+      const data = snap.data();
+      if (data.lastPlacedPixel) {
+        lastPlacedPixel = data.lastPlacedPixel;
+        drawGrid();
+      }
     }
   });
 }
