@@ -84,7 +84,43 @@ let sessionHistory = [];
 // Current position in sessionHistory, -1 means initial empty
 let currentHistoryIndex = -1;
 
-// Draw grid + pixels + last placed pixel username label + pixel count for current user
+// Initialize history by loading current pixel data snapshot from Firestore (called after auth and session creator known)
+async function initializeHistory() {
+  try {
+    const pixelsSnap = await pixelsDocRef.get();
+    if (pixelsSnap.exists) {
+      const data = pixelsSnap.data() || {};
+      // Initialize session history with current pixel data snapshot
+      sessionHistory = [{ pixelDataSnapshot: JSON.parse(JSON.stringify(data)) }];
+      currentHistoryIndex = 0;
+
+      // Show slider for creator if applicable
+      if (currentUser && currentUser.uid === sessionCreatorUid && progressSlider) {
+        progressSlider.style.display = "inline-block";
+        progressSlider.max = sessionHistory.length - 1;
+        progressSlider.value = currentHistoryIndex;
+        updateProgressLabel();
+        document.getElementById("progress-container").style.display = "block";
+      }
+    } else {
+      // No pixel data yet - initialize empty
+      sessionHistory = [{ pixelDataSnapshot: {} }];
+      currentHistoryIndex = 0;
+
+      if (currentUser && currentUser.uid === sessionCreatorUid && progressSlider) {
+        progressSlider.style.display = "inline-block";
+        progressSlider.max = 0;
+        progressSlider.value = 0;
+        updateProgressLabel();
+        document.getElementById("progress-container").style.display = "block";
+      }
+    }
+  } catch (e) {
+    console.error("Failed to initialize session history:", e);
+  }
+}
+
+// Draw grid + pixels + last placed pixel username label + pixel count for current user & total pixels
 function drawGrid() {
   ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
   ctx.save();
@@ -148,19 +184,25 @@ function drawGrid() {
   ctx.restore();
 }
 
-// Draw current user's placed pixel count on canvas (top-left corner)
+// Draw current user's placed pixel count AND total pixels placed on canvas
 function drawUserPixelCount() {
   if (!currentUser) return;
 
-  let count = 0;
+  let totalCount = 0;
+  let userCount = 0;
+
   for (const key in pixelData) {
     const pixel = pixelData[key];
-    if (pixel.owner === currentUser.uid && pixel.color !== null) {
-      count++;
+    if (pixel.color !== null && pixel.color !== undefined) {
+      totalCount++;
+      if (pixel.owner === currentUser.uid) {
+        userCount++;
+      }
     }
   }
 
-  const text = `Pixels placed: ${count}`;
+  const text = `Pixels placed: You ${userCount} / Total ${totalCount}`;
+
   ctx.save();
   ctx.resetTransform();
   ctx.font = "16px Arial";
@@ -195,11 +237,14 @@ function applyHistoryIndex(index) {
   currentHistoryIndex = index;
 
   // Update pixels doc with reverted data (only session creator can do this)
-  pixelsDocRef.set(pixelData).then(() => {
-    drawGrid();
-  }).catch((err) => {
-    console.error("Failed to apply history index:", err);
-  });
+  pixelsDocRef
+    .set(pixelData)
+    .then(() => {
+      drawGrid();
+    })
+    .catch((err) => {
+      console.error("Failed to apply history index:", err);
+    });
 
   // Update slider label
   updateProgressLabel();
@@ -277,6 +322,7 @@ canvas.addEventListener("click", async (evt) => {
           progressSlider.max = sessionHistory.length - 1;
           progressSlider.value = currentHistoryIndex;
           updateProgressLabel();
+          document.getElementById("progress-container").style.display = "block";
         }
       }
 
@@ -371,6 +417,7 @@ importConfirmBtn.addEventListener("click", () => {
         progressSlider.max = 0;
         progressSlider.value = 0;
         updateProgressLabel();
+        document.getElementById("progress-container").style.display = "block";
       }
     }
   } catch {
