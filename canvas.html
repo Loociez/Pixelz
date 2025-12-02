@@ -19,6 +19,7 @@
   }
   body[data-readonly="true"] #color-picker,
   body[data-readonly="true"] #brush-size,
+  body[data-readonly="true"] #brush-shape,
   body[data-readonly="true"] #eraser-btn,
   body[data-readonly="true"] #undo-btn,
   body[data-readonly="true"] #redo-btn,
@@ -86,6 +87,7 @@
     justify-content: center;
     gap: 1rem;
     flex-wrap: wrap;
+    align-items: center;
   }
   #tools > * {
     cursor: pointer;
@@ -98,6 +100,14 @@
   }
   #brush-size {
     width: 50px;
+  }
+  #brush-shape {
+    height: 30px;
+    border-radius: 4px;
+    background: #222;
+    color: #eee;
+    border: 1px solid #888;
+    cursor: pointer;
   }
   #info {
     text-align: center;
@@ -223,8 +233,16 @@
 
       <div id="tools">
         <input type="color" id="color-picker" value="#ff0000" title="Pick a color" />
-        <label for="brush-size" style="color:#eee;">Brush Size:</label>
+        <label for="brush-size" style="color:#eee; user-select:none;">Brush Size:</label>
         <input type="number" id="brush-size" value="1" min="1" max="10" />
+        
+        <label for="brush-shape" style="color:#eee; user-select:none;">Brush Shape:</label>
+        <select id="brush-shape" title="Select brush shape">
+          <option value="square" selected>Square</option>
+          <option value="circle">Circle</option>
+          <option value="line">Line</option>
+        </select>
+
         <button id="eraser-btn" title="Eraser tool">Eraser</button>
         <button id="undo-btn" title="Undo last change">Undo</button>
         <button id="redo-btn" title="Redo undone change">Redo</button>

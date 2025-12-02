@@ -1,5 +1,3 @@
-// canvas.js (Part 1 of 2)
-
 const firebaseConfig = {
   apiKey: "AIzaSyDXRSt2pmgqChOGJr4gr9e2Z_tZaGxBpoo",
   authDomain: "shildonia-38aab.firebaseapp.com",
@@ -66,6 +64,34 @@ let isEraserActive = false;
 let currentUser = null;
 let currentUsername = "Guest";
 let zoomLevel = 1;
+
+// New tool: brush shape/type
+// Possible values: "square", "circle", "line"
+let brushShape = "square"; // default brush shape
+
+// Add brush shape selector to tools panel dynamically
+const toolsDiv = document.getElementById("tools");
+const brushShapeLabel = document.createElement("label");
+brushShapeLabel.textContent = "Brush Shape:";
+brushShapeLabel.style.color = "#eee";
+brushShapeLabel.style.marginLeft = "1rem";
+
+const brushShapeSelect = document.createElement("select");
+brushShapeSelect.id = "brush-shape";
+["square", "circle", "line"].forEach((shape) => {
+  const option = document.createElement("option");
+  option.value = shape;
+  option.textContent = shape.charAt(0).toUpperCase() + shape.slice(1);
+  brushShapeSelect.appendChild(option);
+});
+brushShapeSelect.value = brushShape;
+
+brushShapeSelect.addEventListener("change", () => {
+  brushShape = brushShapeSelect.value;
+});
+
+toolsDiv.appendChild(brushShapeLabel);
+toolsDiv.appendChild(brushShapeSelect);
 
 const sessionDocRef = db.collection("sessions").doc(sessionId);
 const pixelsDocRef = sessionDocRef.collection("pixels").doc("data");
@@ -221,38 +247,53 @@ function getMousePos(evt) {
   const y = Math.floor((evt.clientY - rect.top) / (PIXEL_SIZE * zoomLevel));
   return { x, y };
 }
+// Apply brush stroke with different shapes
+function applyBrush(x, y, brushSize, color, isErase) {
+  const changes = [];
 
-// Apply history state at given index (revert or redo)
-function applyHistoryIndex(index) {
-  if (index < 0 || index >= sessionHistory.length) {
-    console.warn("Invalid history index", index);
-    return;
+  // Helper: set pixel color or erase at (px, py)
+  function setPixel(px, py) {
+    if (px < 0 || px >= GRID_WIDTH || py < 0 || py >= GRID_HEIGHT) return;
+
+    const pixelId = `${px}_${py}`;
+    const oldPixel = pixelData[pixelId] || { color: null, owner: null };
+    const oldColor = oldPixel.color;
+    const newColor = isErase ? null : color;
+
+    if (oldColor !== newColor) {
+      changes.push({ pixelId, oldColor, newColor });
+      pixelData[pixelId] = {
+        color: newColor,
+        owner: currentUser.uid,
+        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+      };
+    }
   }
-  const snapshot = sessionHistory[index];
-  if (!snapshot) return;
 
-  pixelData = JSON.parse(JSON.stringify(snapshot.pixelDataSnapshot)); // deep copy
+  if (brushShape === "square") {
+    for (let dx = 0; dx < brushSize; dx++) {
+      for (let dy = 0; dy < brushSize; dy++) {
+        setPixel(x + dx, y + dy);
+      }
+    }
+  } else if (brushShape === "circle") {
+    // Draw circle brush with radius brushSize / 2
+    const radius = brushSize / 2;
+    for (let dx = -Math.floor(radius); dx <= Math.ceil(radius); dx++) {
+      for (let dy = -Math.floor(radius); dy <= Math.ceil(radius); dy++) {
+        if (dx * dx + dy * dy <= radius * radius) {
+          setPixel(x + dx, y + dy);
+        }
+      }
+    }
+  } else if (brushShape === "line") {
+    // Draw a horizontal line of length brushSize
+    for (let dx = 0; dx < brushSize; dx++) {
+      setPixel(x + dx, y);
+    }
+  }
 
-  currentHistoryIndex = index;
-
-  // Update pixels doc with reverted data (only session creator can do this)
-  pixelsDocRef
-    .set(pixelData)
-    .then(() => {
-      drawGrid();
-    })
-    .catch((err) => {
-      console.error("Failed to apply history index:", err);
-    });
-
-  // Update slider label
-  updateProgressLabel();
-}
-
-// Update progress label text
-function updateProgressLabel() {
-  if (!progressLabel) return;
-  progressLabel.textContent = `History step: ${currentHistoryIndex + 1} / ${sessionHistory.length}`;
+  return changes;
 }
 
 // Drawing handler - updates pixels + lastPlacedPixel in Firestore
@@ -264,31 +305,7 @@ canvas.addEventListener("click", async (evt) => {
   if (x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT) return;
 
   const brushSize = Math.min(Math.max(parseInt(brushSizeInput.value, 10), 1), 10);
-
-  let changes = [];
-
-  // Build updates for brush area
-  for (let dx = 0; dx < brushSize; dx++) {
-    for (let dy = 0; dy < brushSize; dy++) {
-      const px = x + dx;
-      const py = y + dy;
-      if (px >= GRID_WIDTH || py >= GRID_HEIGHT) continue;
-
-      const pixelId = `${px}_${py}`;
-      const oldPixel = pixelData[pixelId] || { color: null, owner: null };
-      const oldColor = oldPixel.color;
-      const newColor = isEraserActive ? null : colorPicker.value;
-
-      if (oldColor !== newColor) {
-        changes.push({ pixelId, oldColor, newColor });
-        pixelData[pixelId] = {
-          color: newColor,
-          owner: currentUser.uid,
-          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-        };
-      }
-    }
-  }
+  const changes = applyBrush(x, y, brushSize, colorPicker.value, isEraserActive);
 
   if (changes.length > 0) {
     userUndoStack.push(changes);
@@ -433,20 +450,32 @@ if (progressSlider) {
   });
 }
 
-// Chat
-chatSendBtn.addEventListener("click", async () => {
+// Chat: Send message when Send button clicked or Enter pressed
+chatSendBtn.addEventListener("click", sendChatMessage);
+chatText.addEventListener("keydown", async (evt) => {
+  if (evt.key === "Enter" && !evt.shiftKey) {
+    evt.preventDefault();
+    await sendChatMessage();
+  }
+});
+
+async function sendChatMessage() {
   const text = chatText.value.trim();
   if (!text) return;
 
-  await chatCollectionRef.add({
-    uid: currentUser.uid,
-    username: currentUsername,
-    text,
-    timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-  });
-
-  chatText.value = "";
-});
+  try {
+    await chatCollectionRef.add({
+      uid: currentUser.uid,
+      username: currentUsername,
+      text,
+      timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+    chatText.value = "";
+  } catch (err) {
+    console.error("Failed to send chat message:", err);
+    alert("Failed to send message.");
+  }
+}
 
 // Publish
 publishBtn.addEventListener("click", async () => {
