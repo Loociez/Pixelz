@@ -1,4 +1,4 @@
-// canvas.js
+// canvas.js (Part 1 of 2)
 
 const firebaseConfig = {
   apiKey: "AIzaSyDXRSt2pmgqChOGJr4gr9e2Z_tZaGxBpoo",
@@ -214,7 +214,6 @@ function drawUserPixelCount() {
   ctx.fillText(text, 10, 10);
   ctx.restore();
 }
-
 // Get mouse pixel pos
 function getMousePos(evt) {
   const rect = canvas.getBoundingClientRect();
