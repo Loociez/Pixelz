@@ -47,6 +47,10 @@ const importAreaContainer = document.getElementById("export-import");
 const importTextarea = document.getElementById("import-textarea");
 const importConfirmBtn = document.getElementById("import-confirm-btn");
 
+// New: progress slider (must be added in HTML)
+const progressSlider = document.getElementById("progress-slider");
+const progressLabel = document.getElementById("progress-label");
+
 const PIXEL_SIZE = 10;
 const GRID_WIDTH = 192;
 const GRID_HEIGHT = 128;
@@ -74,7 +78,13 @@ let sessionCreatorUid = null;
 
 let lastPlacedPixel = null; // track last placed pixel info for username display
 
-// Draw grid + pixels + last placed pixel username label
+// New: global session-wide history for all pixel changes, array of pixelData snapshots
+// Each entry: { pixelDataSnapshot: {...} }
+let sessionHistory = [];
+// Current position in sessionHistory, -1 means initial empty
+let currentHistoryIndex = -1;
+
+// Draw grid + pixels + last placed pixel username label + pixel count for current user
 function drawGrid() {
   ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
   ctx.save();
@@ -133,6 +143,33 @@ function drawGrid() {
     }
   }
 
+  drawUserPixelCount();
+
+  ctx.restore();
+}
+
+// Draw current user's placed pixel count on canvas (top-left corner)
+function drawUserPixelCount() {
+  if (!currentUser) return;
+
+  let count = 0;
+  for (const key in pixelData) {
+    const pixel = pixelData[key];
+    if (pixel.owner === currentUser.uid && pixel.color !== null) {
+      count++;
+    }
+  }
+
+  const text = `Pixels placed: ${count}`;
+  ctx.save();
+  ctx.resetTransform();
+  ctx.font = "16px Arial";
+  ctx.fillStyle = "white";
+  ctx.strokeStyle = "black";
+  ctx.lineWidth = 3;
+  ctx.textBaseline = "top";
+  ctx.strokeText(text, 10, 10);
+  ctx.fillText(text, 10, 10);
   ctx.restore();
 }
 
@@ -142,6 +179,36 @@ function getMousePos(evt) {
   const x = Math.floor((evt.clientX - rect.left) / (PIXEL_SIZE * zoomLevel));
   const y = Math.floor((evt.clientY - rect.top) / (PIXEL_SIZE * zoomLevel));
   return { x, y };
+}
+
+// Apply history state at given index (revert or redo)
+function applyHistoryIndex(index) {
+  if (index < 0 || index >= sessionHistory.length) {
+    console.warn("Invalid history index", index);
+    return;
+  }
+  const snapshot = sessionHistory[index];
+  if (!snapshot) return;
+
+  pixelData = JSON.parse(JSON.stringify(snapshot.pixelDataSnapshot)); // deep copy
+
+  currentHistoryIndex = index;
+
+  // Update pixels doc with reverted data (only session creator can do this)
+  pixelsDocRef.set(pixelData).then(() => {
+    drawGrid();
+  }).catch((err) => {
+    console.error("Failed to apply history index:", err);
+  });
+
+  // Update slider label
+  updateProgressLabel();
+}
+
+// Update progress label text
+function updateProgressLabel() {
+  if (!progressLabel) return;
+  progressLabel.textContent = `History step: ${currentHistoryIndex + 1} / ${sessionHistory.length}`;
 }
 
 // Drawing handler - updates pixels + lastPlacedPixel in Firestore
@@ -194,6 +261,24 @@ canvas.addEventListener("click", async (evt) => {
           timestamp: firebase.firestore.FieldValue.serverTimestamp(),
         },
       });
+
+      // If current user is session creator, update global session history
+      if (currentUser.uid === sessionCreatorUid) {
+        // Remove any redo history beyond currentHistoryIndex
+        if (currentHistoryIndex < sessionHistory.length - 1) {
+          sessionHistory = sessionHistory.slice(0, currentHistoryIndex + 1);
+        }
+        // Add new snapshot
+        sessionHistory.push({ pixelDataSnapshot: JSON.parse(JSON.stringify(pixelData)) });
+        currentHistoryIndex = sessionHistory.length - 1;
+
+        // Update slider max and value
+        if (progressSlider) {
+          progressSlider.max = sessionHistory.length - 1;
+          progressSlider.value = currentHistoryIndex;
+          updateProgressLabel();
+        }
+      }
 
       drawGrid();
     } catch (err) {
@@ -277,10 +362,31 @@ importConfirmBtn.addEventListener("click", () => {
     pixelsDocRef.set(pixelData);
     importTextarea.value = "";
     importAreaContainer.style.display = "none";
+
+    // Reset history after import (only for creator)
+    if (currentUser && currentUser.uid === sessionCreatorUid) {
+      sessionHistory = [{ pixelDataSnapshot: JSON.parse(JSON.stringify(pixelData)) }];
+      currentHistoryIndex = 0;
+      if (progressSlider) {
+        progressSlider.max = 0;
+        progressSlider.value = 0;
+        updateProgressLabel();
+      }
+    }
+
   } catch {
     alert("Invalid JSON");
   }
 });
+
+// Listen for slider changes (only for session creator)
+if (progressSlider) {
+  progressSlider.addEventListener("input", () => {
+    if (!currentUser || currentUser.uid !== sessionCreatorUid) return;
+    const index = parseInt(progressSlider.value, 10);
+    applyHistoryIndex(index);
+  });
+}
 
 // Chat
 chatSendBtn.addEventListener("click", async () => {
@@ -391,6 +497,18 @@ auth.onAuthStateChanged(async (user) => {
 
     if (currentUser.uid === sessionCreatorUid && !isReadOnly) {
       publishBtn.style.display = "inline-block";
+
+      // Show slider UI for creator
+      if (progressSlider) {
+        progressSlider.style.display = "inline-block";
+        progressSlider.max = sessionHistory.length - 1 >= 0 ? sessionHistory.length - 1 : 0;
+        progressSlider.value = currentHistoryIndex >= 0 ? currentHistoryIndex : 0;
+        updateProgressLabel();
+      }
+    } else {
+      if (progressSlider) {
+        progressSlider.style.display = "none";
+      }
     }
   }
 
@@ -404,6 +522,7 @@ auth.onAuthStateChanged(async (user) => {
     importBtn.style.display = "none";
     publishBtn.style.display = "none";
     importAreaContainer.style.display = "none";
+    if (progressSlider) progressSlider.style.display = "none";
   }
 
   listenCanvasUpdates();

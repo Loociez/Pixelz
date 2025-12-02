@@ -158,6 +158,26 @@
   #zoom-controls button {
     background: #4caf50;
   }
+
+  /* New styles for progress slider */
+  #progress-container {
+    margin-top: 0.75rem;
+    width: 100%;
+    max-width: 600px;
+    color: #eee;
+    text-align: center;
+    user-select: none;
+  }
+  #progress-slider {
+    width: 100%;
+    margin-top: 0.25rem;
+    cursor: pointer;
+  }
+  #progress-label {
+    font-size: 0.85rem;
+    margin-top: 0.3rem;
+    display: block;
+  }
 </style>
 
 <!-- Firebase SDKs -->
@@ -199,6 +219,7 @@
       <div id="canvas-wrapper">
         <canvas id="pixelCanvas" tabindex="0"></canvas>
       </div>
+
       <div id="tools">
         <input type="color" id="color-picker" value="#ff0000" title="Pick a color" />
         <label for="brush-size" style="color:#eee;">Brush Size:</label>
@@ -212,6 +233,13 @@
           <button id="reset-zoom-btn" title="Reset Zoom">Reset</button>
         </div>
       </div>
+
+      <!-- NEW: Progress slider container -->
+      <div id="progress-container" style="display:none;">
+        <input type="range" id="progress-slider" min="0" max="0" value="0" />
+        <span id="progress-label">History step: 0 / 0</span>
+      </div>
+
       <div id="info">Click pixels to draw. Use brush size & eraser tools.</div>
     </div>
 
